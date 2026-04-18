@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电子云可视化 - 增强交互版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        window.MathJax = {
+            tex: { inlineMath: [['$', '$']] },
+            svg: { fontCache: 'global' }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        body { margin: 0; background: #020202; color: #eee; overflow: hidden; font-family: 'Inter', sans-serif; }
+        .manim-ui { backdrop-filter: blur(12px); background: rgba(15, 15, 15, 0.75); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .loading-bar { height: 3px; background: linear-gradient(90deg, #3b82f6, #60a5fa); transition: width 0.3s; }
+        .control-btn { transition: all 0.2s; background: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.3); }
+        .control-btn:hover { background: rgba(59, 130, 246, 0.4); transform: translateY(-1px); }
+        .control-btn:active { transform: translateY(0); }
+    </style>
+</head>
+<body>
+
+    <!-- 顶部标题与进度 -->
+    <div class="absolute top-8 left-8 z-10 pointer-events-none">
+        <h1 class="text-3xl font-extralight tracking-[0.2em] text-blue-400 uppercase">Electron Cloud Visualization</h1>
+        <p class="text-gray-500 text-sm mt-1 tracking-widest">量子力学概率密度模拟</p>
+        <div id="progress-container" class="mt-4 w-64 bg-gray-900 h-1 rounded-full overflow-hidden">
+            <div id="progress-bar" class="loading-bar" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <!-- 右侧控制面板 -->
+    <div class="absolute right-8 top-1/2 -translate-y-1/2 w-80 manim-ui p-6 rounded-2xl z-10">
+        <h2 class="text-lg font-medium mb-6 text-blue-200 border-b border-gray-800 pb-2">参数配置</h2>
+        <div class="space-y-6">
+            <div>
+                <div class="flex justify-between text-sm mb-2"><span>主量子数 $n$</span><span id="vn" class="text-blue-400 font-mono">3</span></div>
+                <input type="range" id="sn" min="1" max="4" step="1" value="3" class="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500">
+            </div>
+            <div>
+                <div class="flex justify-between text-sm mb-2"><span>角量子数 $l$</span><span id="vl" class="text-blue-400 font-mono">2</span></div>
+                <input type="range" id="sl" min="0" max="3" step="1" value="2" class="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500">
+            </div>
+            <div>
+                <div class="flex justify-between text-sm mb-2"><span>磁量子数 $m$</span><span id="vm" class="text-blue-400 font-mono">0</span></div>
+                <input type="range" id="sm" min="-3" max="3" step="1" value="0" class="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-blue-500">
+            </div>
+        </div>
+
+        <div class="mt-8 grid grid-cols-2 gap-3">
+            <button id="reset-cam" class="control-btn py-2 px-4 rounded-lg text-xs text-blue-100 flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                最佳视角
+            </button>
+            <button id="reset-rot" class="control-btn py-2 px-4 rounded-lg text-xs text-blue-100 flex items-center justify-center gap-2">
+                停止旋转
+            </button>
+            <button id="zoom-in" class="control-btn py-2 px-4 rounded-lg text-sm text-blue-100 font-bold">+</button>
+            <button id="zoom-out" class="control-btn py-2 px-4 rounded-lg text-sm text-blue-100 font-bold">-</button>
+        </div>
+        
+        <p class="mt-6 text-[10px] text-gray-500 uppercase tracking-tighter text-center">使用滚轮或拖拽进行交互观察</p>
+    </div>
+
+    <script>
+        // --- 物理常数与计算 ---
+        const factorial = n => n <= 1 ? 1 : n * factorial(n - 1);
+
+        function assocLaguerre(n, k, x) {
+            let L0 = 1, L1 = 1 + k - x;
+            if (n === 0) return L0;
+            if (n === 1) return L1;
+            for (let i = 2; i <= n; i++) {
+                let L2 = ((2 * i - 1 + k - x) * L1 - (i - 1 + k) * L0) / i;
+                L0 = L1; L1 = L2;
+            }
+            return L1;
+        }
+
+        function assocLegendre(l, m, x) {
+            m = Math.abs(m);
+            let pmm = 1.0;
+            if (m > 0) {
+                let somx2 = Math.sqrt((1.0 - x) * (1.0 + x));
+                let fact = 1.0;
+                for (let i = 1; i <= m; i++) {
+                    pmm *= -fact * somx2;
+                    fact += 2.0;
+                }
+            }
+            if (l === m) return pmm;
+            let pmmp1 = x * (2.0 * m + 1.0) * pmm;
+            if (l === m + 1) return pmmp1;
+            let pll = 0;
+            for (let ll = m + 2; ll <= l; ll++) {
+                pll = (x * (2.0 * ll - 1.0) * pmmp1 - (ll + m - 1.0) * pmm) / (ll - m);
+                pmm = pmmp1; pmmp1 = pll;
+            }
+            return pll;
+        }
+
+        function getProb(r, theta, n, l, m) {
+            const rho = (2 * r) / n;
+            const normR = Math.sqrt(Math.pow(2/n, 3) * factorial(n-l-1) / (2*n*factorial(n+l)));
+            const R = normR * Math.exp(-rho/2) * Math.pow(rho, l) * assocLaguerre(n-l-1, 2*l+1, rho);
+            const normY = Math.sqrt(((2*l+1)*factorial(l-Math.abs(m))) / (4*Math.PI*factorial(l+Math.abs(m))));
+            const Y = normY * assocLegendre(l, m, Math.cos(theta));
+            return (R * Y) ** 2;
+        }
+
+        // --- 核心渲染与场景 ---
+        let scene, camera, renderer, cloud, axesHelper, grid;
+        const MAX_PARTICLES = 70000;
+        let currentParticles = 0;
+        let isGenerating = false;
+        let autoRotate = true;
+
+        const BEST_CAM_POS = { x: 22, y: 16, z: 22 };
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
+            resetCamera();
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            // 1. 强化坐标系
+            // 坐标轴：X-红, Y-绿, Z-蓝
+            axesHelper = new THREE.AxesHelper(15);
+            scene.add(axesHelper);
+
+            // 背景网格，颜色更暗但范围更广
+            grid = new THREE.GridHelper(40, 40, 0x444444, 0x111111);
+            grid.rotation.x = Math.PI / 2;
+            scene.add(grid);
+
+            // 2. 电子云粒子
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_PARTICLES * 3), 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_PARTICLES * 3), 3));
+            
+            const mat = new THREE.PointsMaterial({
+                size: 0.14,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.65,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            cloud = new THREE.Points(geo, mat);
+            scene.add(cloud);
+
+            // 监听缩放和事件
+            window.addEventListener('resize', onResize);
+            window.addEventListener('wheel', onMouseWheel, { passive: false });
+            
+            setupInteractions();
+            startGeneration();
+            animate();
+        }
+
+        function resetCamera() {
+            camera.position.set(BEST_CAM_POS.x, BEST_CAM_POS.y, BEST_CAM_POS.z);
+            camera.lookAt(0, 0, 0);
+        }
+
+        // 增量生成算法
+        async function startGeneration() {
+            if (isGenerating) isGenerating = false; 
+            await new Promise(r => setTimeout(r, 30));
+            
+            isGenerating = true;
+            currentParticles = 0;
+            const pos = cloud.geometry.attributes.position.array;
+            const col = cloud.geometry.attributes.color.array;
+            pos.fill(0);
+
+            const n_val = parseInt(document.getElementById('sn').value);
+            const l_val = parseInt(document.getElementById('sl').value);
+            const m_val = parseInt(document.getElementById('sm').value);
+            const range = n_val * n_val * 4.5;
+            const maxProb = 0.02 / (n_val ** 2);
+
+            function generateBatch() {
+                if (!isGenerating) return;
+                let batchSize = 1800; 
+                let found = 0;
+                
+                while (found < batchSize && currentParticles < MAX_PARTICLES) {
+                    const x = (Math.random() - 0.5) * range * 2;
+                    const y = (Math.random() - 0.5) * range * 2;
+                    const z = (Math.random() - 0.5) * range * 2;
+                    const r = Math.sqrt(x*x + y*y + z*z);
+                    const theta = Math.acos(z / (r + 0.0001));
+                    
+                    if (Math.random() * maxProb < getProb(r, theta, n_val, l_val, m_val)) {
+                        const idx = currentParticles * 3;
+                        pos[idx] = x; pos[idx+1] = y; pos[idx+2] = z;
+                        
+                        // 颜色映射
+                        const dist = r / range;
+                        col[idx] = 0.3 + dist;      // R
+                        col[idx+1] = 0.6;           // G
+                        col[idx+2] = 1.0 - dist;    // B
+                        
+                        currentParticles++;
+                        found++;
+                    }
+                }
+
+                cloud.geometry.attributes.position.needsUpdate = true;
+                cloud.geometry.attributes.color.needsUpdate = true;
+                
+                const progress = (currentParticles / MAX_PARTICLES) * 100;
+                document.getElementById('progress-bar').style.width = progress + "%";
+
+                if (currentParticles < MAX_PARTICLES && isGenerating) {
+                    requestAnimationFrame(generateBatch);
+                } else {
+                    document.getElementById('progress-bar').style.width = "0%";
+                }
+            }
+            generateBatch();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (autoRotate) {
+                cloud.rotation.y += 0.002;
+                axesHelper.rotation.y += 0.002;
+                grid.rotation.z += 0.002; // Grid is rotated, so use Z
+            }
+            renderer.render(scene, camera);
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onMouseWheel(e) {
+            e.preventDefault();
+            const factor = 1.1;
+            if (e.deltaY > 0) camera.position.multiplyScalar(factor);
+            else camera.position.divideScalar(factor);
+            camera.lookAt(0, 0, 0);
+        }
+
+        function setupInteractions() {
+            // 参数调整
+            const inputs = ['sn', 'sl', 'sm'];
+            inputs.forEach(id => {
+                document.getElementById(id).addEventListener('input', () => {
+                    const n = parseInt(document.getElementById('sn').value);
+                    const l = document.getElementById('sl');
+                    const m = document.getElementById('sm');
+                    l.max = n - 1;
+                    if (parseInt(l.value) > l.max) l.value = l.max;
+                    m.min = -parseInt(l.value);
+                    m.max = parseInt(l.value);
+                    document.getElementById('vn').innerText = n;
+                    document.getElementById('vl').innerText = l.value;
+                    document.getElementById('vm').innerText = m.value;
+                    startGeneration();
+                });
+            });
+
+            // 功能按钮
+            document.getElementById('reset-cam').onclick = () => {
+                resetCamera();
+                cloud.rotation.set(0,0,0);
+                axesHelper.rotation.set(0,0,0);
+                grid.rotation.set(Math.PI/2, 0, 0);
+            };
+
+            document.getElementById('reset-rot').onclick = (e) => {
+                autoRotate = !autoRotate;
+                e.target.innerText = autoRotate ? "停止旋转" : "恢复旋转";
+            };
+
+            document.getElementById('zoom-in').onclick = () => {
+                camera.position.multiplyScalar(0.85);
+                camera.lookAt(0,0,0);
+            };
+
+            document.getElementById('zoom-out').onclick = () => {
+                camera.position.multiplyScalar(1.2);
+                camera.lookAt(0,0,0);
+            };
+
+            // 鼠标拖拽控制视角
+            let isDragging = false;
+            let lastMouse = { x: 0, y: 0 };
+            document.addEventListener('mousedown', (e) => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+            document.addEventListener('mouseup', () => isDragging = false);
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - lastMouse.x;
+                const dy = e.clientY - lastMouse.y;
+                // 此时控制物体旋转
+                cloud.rotation.y += dx * 0.005;
+                cloud.rotation.x += dy * 0.005;
+                axesHelper.rotation.y += dx * 0.005;
+                axesHelper.rotation.x += dy * 0.005;
+                lastMouse = { x: e.clientX, y: e.clientY };
+            });
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
